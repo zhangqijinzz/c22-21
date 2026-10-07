@@ -8,6 +8,7 @@ import type {
   SampleInput,
 } from '../models/ruleModel';
 import { matchesRule } from './conditionEvaluator';
+import { normalizeResultText } from './resultNormalization';
 
 const MAX_CASES = 120_000;
 const MAX_EXAMPLES = 4;
@@ -54,10 +55,12 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
           const ruleB = matched[right];
           const key = [ruleA.id, ruleB.id].sort().join('|');
           if (!overlaps.has(key)) {
+            const samePriority = ruleA.priority === ruleB.priority;
             overlaps.set(key, {
               ruleAId: ruleA.id,
               ruleBId: ruleB.id,
-              conflict: ruleA.priority === ruleB.priority && ruleA.result !== ruleB.result,
+              conflict: samePriority && normalizeResultText(ruleA.result) !== normalizeResultText(ruleB.result),
+              rawConflict: samePriority && ruleA.result !== ruleB.result,
               witness: { ...values },
             });
           }

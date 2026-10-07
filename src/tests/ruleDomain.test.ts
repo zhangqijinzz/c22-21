@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { evaluateSample } from '../domain/conditionEvaluator';
 import { validateField, validateProject } from '../domain/fieldValidation';
 import { analyzeRules } from '../domain/ruleAnalysis';
-import type { BusinessRule, RuleField, RuleProject } from '../models/ruleModel';
+import { groupResultsByMeaning, normalizeResultText } from '../domain/resultNormalization';
+import type { BusinessRule, RuleField, RuleOverlap, RuleProject } from '../models/ruleModel';
 
 const amount: RuleField = { id: 'amount', name: '金额', type: 'number', min: 0, max: 1000 };
 const tier: RuleField = { id: 'tier', name: '等级', type: 'enum', enumValues: ['basic', 'gold'] };
@@ -64,5 +65,53 @@ describe('rule consistency analysis', () => {
     expect(result.winner?.id).toBe('either');
     const missing = evaluateSample(project([rule]), { amount: 10, tier: 'gold' });
     expect(missing.errors).toEqual(['请填写“启用”']);
+  });
+});
+
+describe('result normalization', () => {
+  it('treats whitespace, separator, case and full-width variants as the same meaning', () => {
+    expect(normalizeResultText('免运费 · 9 折')).toBe(normalizeResultText('免运费·9折'));
+    expect(normalizeResultText('免运费、９折')).toBe(normalizeResultText('免运费·9折'));
+    expect(normalizeResultText('免运费， 9折')).toBe(normalizeResultText('免运费·9折'));
+    expect(normalizeResultText('VIP 通道')).toBe(normalizeResultText('vip通道'));
+    expect(normalizeResultText('自动通过 / 应用 9 折')).toBe(normalizeResultText('自动通过·应用9折'));
+  });
+
+  it('stays order-sensitive and keeps distinct meanings apart', () => {
+    expect(normalizeResultText('9折·免运费')).not.toBe(normalizeResultText('免运费·9折'));
+    expect(normalizeResultText('立减 80 元')).not.toBe(normalizeResultText('免运费·9折'));
+  });
+
+  it('judges conflicts by normalized meaning while keeping the raw comparison for reconciliation', () => {
+    const rules = [
+      makeRule('a', amountAtLeast(500), 10, '免运费 · 9 折'),
+      makeRule('b', amountAtLeast(400), 10, '免运费·9折'),
+      makeRule('c', amountAtLeast(600), 10, '立减 80 元'),
+    ];
+    const analysis = analyzeRules(project(rules, [amount]));
+    const pair = (x: string, y: string): RuleOverlap | undefined => analysis.overlaps.find((overlap) => [overlap.ruleAId, overlap.ruleBId].sort().join('|') === [x, y].sort().join('|'));
+    expect(pair('a', 'b')?.conflict).toBe(false);
+    expect(pair('a', 'b')?.rawConflict).toBe(true);
+    expect(pair('a', 'c')?.conflict).toBe(true);
+    expect(pair('a', 'c')?.rawConflict).toBe(true);
+    expect(analysis.overlaps.filter((overlap) => overlap.rawConflict)).toHaveLength(3);
+    expect(analysis.overlaps.filter((overlap) => overlap.conflict)).toHaveLength(2);
+  });
+
+  it('groups result variants by meaning without rewriting stored text', () => {
+    const rules = [
+      makeRule('a', amountAtLeast(500), 10, '免运费 · 9 折'),
+      makeRule('b', amountAtLeast(400), 10, '免运费·9折'),
+      makeRule('c', amountAtLeast(300), 10, '免运费·9折'),
+      makeRule('d', amountAtLeast(200), 10, '立减 80 元'),
+      makeRule('empty', amountAtLeast(100), 10, '  '),
+    ];
+    const groups = groupResultsByMeaning(rules);
+    expect(groups).toHaveLength(2);
+    const merged = groups.find((group) => group.variants.length > 1);
+    expect(merged?.display).toBe('免运费·9折');
+    expect(merged?.ruleCount).toBe(3);
+    expect(merged?.variants.map((variant) => variant.text).sort()).toEqual(['免运费 · 9 折', '免运费·9折']);
+    expect(rules.map((rule) => rule.result)).toEqual(['免运费 · 9 折', '免运费·9折', '免运费·9折', '立减 80 元', '  ']);
   });
 });

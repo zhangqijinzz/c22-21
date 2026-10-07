@@ -1,4 +1,6 @@
-import type { BusinessRule, ConditionGroup, PredicateCondition, RuleField, RuleProject } from '../../models/ruleModel';
+import { analyzeRules } from '../../domain/ruleAnalysis';
+import { groupResultsByMeaning } from '../../domain/resultNormalization';
+import type { BusinessRule, ConditionGroup, PredicateCondition, ResultUnifyReport, RuleAnalysis, RuleField, RuleProject } from '../../models/ruleModel';
 import type { WorkspacePort } from '../../viewmodels/workspacePort';
 
 export class RulesViewModel {
@@ -67,6 +69,44 @@ export class RulesViewModel {
       : rule, '已移除一个条件');
   }
 
+  unifyResultGroup(groupKey: string, canonical: string): void {
+    const project = this.currentProject();
+    if (!project) return;
+    const group = groupResultsByMeaning(project.rules).find((candidate) => candidate.key === groupKey);
+    if (!group || group.variants.length < 2) return;
+    const target = canonical.trim();
+    if (!target) {
+      this.workspace.updateView({ notice: '统一后的结果文案不能为空。' });
+      return;
+    }
+    const variantTexts = new Set(group.variants.map((variant) => variant.text));
+    const before = analyzeRules(project);
+    const rules = project.rules.map((rule) => variantTexts.has(rule.result) && rule.result !== target ? { ...rule, result: target } : rule);
+    const affectedRuleIds = rules.filter((rule, index) => rule !== project.rules[index]).map((rule) => rule.id);
+    if (!affectedRuleIds.length) {
+      this.workspace.updateView({ notice: '该含义下的结果写法已经一致，无需统一。' });
+      return;
+    }
+    const next = { ...project, rules };
+    const after = analyzeRules(next);
+    const report: ResultUnifyReport = {
+      canonical: target,
+      unifiedTexts: group.variants.map((variant) => variant.text),
+      affectedRuleIds,
+      rawConflictsBefore: countRawConflicts(before),
+      rawConflictsAfter: countRawConflicts(after),
+      normalizedConflictsBefore: countNormalizedConflicts(before),
+      normalizedConflictsAfter: countNormalizedConflicts(after),
+    };
+    const eliminated = report.rawConflictsBefore - report.rawConflictsAfter;
+    const committed = this.workspace.commitProject(next, `已将 ${group.variants.length} 种写法统一为「${target}」，消除 ${eliminated} 个写法差异冲突`);
+    if (committed) this.workspace.updateView({ resultUnifyReport: report });
+  }
+
+  dismissUnifyReport(): void {
+    this.workspace.updateView({ resultUnifyReport: null });
+  }
+
   private currentProject(): RuleProject | null {
     return this.workspace.getSnapshot().project;
   }
@@ -85,6 +125,14 @@ function defaultCondition(field: RuleField): PredicateCondition {
   if (field.type === 'number') return { kind: 'predicate', fieldId: field.id, operator: 'gte', value: field.min ?? 0 };
   if (field.type === 'enum') return { kind: 'predicate', fieldId: field.id, operator: 'eq', value: field.enumValues?.[0] ?? '' };
   return { kind: 'predicate', fieldId: field.id, operator: 'isTrue', value: true };
+}
+
+function countRawConflicts(analysis: RuleAnalysis): number {
+  return analysis.overlaps.filter((overlap) => overlap.rawConflict).length;
+}
+
+function countNormalizedConflicts(analysis: RuleAnalysis): number {
+  return analysis.overlaps.filter((overlap) => overlap.conflict).length;
 }
 
 function makeId(prefix: string): string {

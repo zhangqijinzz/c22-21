@@ -1,5 +1,7 @@
+import { groupResultsByMeaning, normalizeResultText, type ResultMeaningGroup } from '../../domain/resultNormalization';
 import type { BusinessRule, PredicateCondition, RuleField } from '../../models/ruleModel';
 import type { WorkspaceState } from '../../viewmodels/workspaceViewModel';
+import { ResultLibraryPanel } from './ResultLibraryPanel';
 import type { RulesViewModel } from './rulesViewModel';
 
 interface RulesViewProps { state: WorkspaceState; viewModel: RulesViewModel }
@@ -7,6 +9,9 @@ interface RulesViewProps { state: WorkspaceState; viewModel: RulesViewModel }
 export function RulesView({ state, viewModel }: RulesViewProps) {
   const project = state.project;
   const rules = project?.rules ?? [];
+  const resultGroups = groupResultsByMeaning(rules);
+  const groupsByKey = new Map(resultGroups.map((group) => [group.key, group]));
+  const resultOptions = [...new Set(rules.map((rule) => rule.result).filter((text) => text.trim()))];
   return (
     <section className="module-page">
       <div className="page-heading">
@@ -15,9 +20,11 @@ export function RulesView({ state, viewModel }: RulesViewProps) {
       </div>
       {project?.frozenVersionId && <div className="frozen-notice">◈ 当前项目已冻结。到检查与版本模块复制此版本后继续编辑。</div>}
       {project && project.fields.length === 0 && <div className="inline-issue">先到“字段定义”添加输入字段，再为规则设置条件。</div>}
+      <ResultLibraryPanel groups={resultGroups} report={state.resultUnifyReport} onUnify={(key, canonical) => viewModel.unifyResultGroup(key, canonical)} onDismissReport={() => viewModel.dismissUnifyReport()} />
+      <datalist id="rule-result-options">{resultOptions.map((text) => <option key={text} value={text} />)}</datalist>
       {rules.length === 0 ? <div className="empty-card card-surface"><div className="empty-icon">⌘</div><h2>规则还没有开始编织</h2><p>创建第一条规则，组合一个或多个字段条件，并填写命中结果。</p></div> : (
         <div className="rules-list">
-          {rules.map((rule, index) => <RuleCard key={rule.id} rule={rule} index={index} fields={project?.fields ?? []} selected={state.selectedRuleId === rule.id} viewModel={viewModel} />)}
+          {rules.map((rule, index) => <RuleCard key={rule.id} rule={rule} index={index} fields={project?.fields ?? []} selected={state.selectedRuleId === rule.id} meaningGroup={rule.result.trim() ? groupsByKey.get(normalizeResultText(rule.result)) : undefined} viewModel={viewModel} />)}
         </div>
       )}
       {state.validationIssues.filter((issue) => issue.ruleId).map((issue, index) => <div className="inline-issue" key={`${issue.code}-${index}`}>! {issue.message}</div>)}
@@ -25,9 +32,9 @@ export function RulesView({ state, viewModel }: RulesViewProps) {
   );
 }
 
-interface RuleCardProps { rule: BusinessRule; index: number; fields: RuleField[]; selected: boolean; viewModel: RulesViewModel }
+interface RuleCardProps { rule: BusinessRule; index: number; fields: RuleField[]; selected: boolean; meaningGroup?: ResultMeaningGroup; viewModel: RulesViewModel }
 
-function RuleCard({ rule, index, fields, selected, viewModel }: RuleCardProps) {
+function RuleCard({ rule, index, fields, selected, meaningGroup, viewModel }: RuleCardProps) {
   const updateCondition = (conditionIndex: number, condition: PredicateCondition) => viewModel.updateCondition(rule.id, conditionIndex, condition);
   return (
     <article data-rule-id={rule.id} className={`rule-card card-surface${selected ? ' rule-card-selected' : ''}`} onFocus={() => viewModel.selectRule(rule.id)}>
@@ -44,7 +51,7 @@ function RuleCard({ rule, index, fields, selected, viewModel }: RuleCardProps) {
         ) : <div className="nested-condition" key={`${rule.id}-${conditionIndex}`}>条件组 · {condition.operator.toUpperCase()} ({condition.conditions.length} 项)</div>)}
         <button className="text-button add-condition" disabled={fields.length === 0} onClick={() => viewModel.addCondition(rule.id)}>＋ 添加条件</button>
       </div>
-      <div className="result-row"><div className="result-label"><span className="result-arrow">↳</span><span>命中结果</span></div><input aria-label={`${rule.name}命中结果`} value={rule.result} onChange={(event) => viewModel.updateRule(rule.id, { result: event.target.value })} placeholder="例如：自动通过 / 应用 9 折" /></div>
+      <div className="result-row"><div className="result-label"><span className="result-arrow">↳</span><span>命中结果</span></div><input aria-label={`${rule.name}命中结果`} list="rule-result-options" value={rule.result} onChange={(event) => viewModel.updateRule(rule.id, { result: event.target.value })} placeholder="例如：自动通过 / 应用 9 折" />{meaningGroup && meaningGroup.variants.length > 1 && <span className="result-variant-hint" title={meaningGroup.variants.map((variant) => `「${variant.text}」×${variant.ruleIds.length}`).join('  ')}>≡ {meaningGroup.variants.length} 种写法</span>}</div>
     </article>
   );
 }

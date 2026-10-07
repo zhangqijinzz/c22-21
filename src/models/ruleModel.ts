@@ -82,8 +82,21 @@ export interface MatchWitness {
 export interface RuleOverlap {
   ruleAId: string;
   ruleBId: string;
+  /** 按规范化含义比较结果：同优先级且含义不同才冲突 */
   conflict: boolean;
+  /** 按原始文案比较结果：仅用于统一前后的冲突数量核对 */
+  rawConflict: boolean;
   witness: SampleInput;
+}
+
+export interface ResultUnifyReport {
+  canonical: string;
+  unifiedTexts: string[];
+  affectedRuleIds: string[];
+  rawConflictsBefore: number;
+  rawConflictsAfter: number;
+  normalizedConflictsBefore: number;
+  normalizedConflictsAfter: number;
 }
 
 export interface RuleAnalysis {
