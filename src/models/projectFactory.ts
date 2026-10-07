@@ -16,6 +16,12 @@ export function createDemoWorkspace(): WorkspaceDocument {
       { kind: 'predicate', fieldId: 'coupon-active', operator: 'isTrue', value: true },
       { kind: 'predicate', fieldId: 'cart-total', operator: 'gte', value: 800 },
     ] }),
+    // 与“金卡大额订单”同优先级、条件可同时成立；结果只是空格与分隔符写法不同，规范化后含义一致。
+    rule('rule-gold-quick-deal', '金卡快捷成交', 30, '免运费·9折', { kind: 'group', operator: 'and', conditions: [
+      { kind: 'predicate', fieldId: 'member-level', operator: 'eq', value: '金卡会员' },
+      { kind: 'predicate', fieldId: 'coupon-active', operator: 'isTrue', value: true },
+      { kind: 'predicate', fieldId: 'cart-total', operator: 'gte', value: 1200 },
+    ] }),
     rule('rule-gold-hidden', '金卡高额加赠', 10, '赠送积分礼包', { kind: 'group', operator: 'and', conditions: [
       { kind: 'predicate', fieldId: 'member-level', operator: 'eq', value: '金卡会员' },
       { kind: 'predicate', fieldId: 'cart-total', operator: 'gte', value: 1500 },

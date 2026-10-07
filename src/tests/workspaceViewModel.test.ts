@@ -35,7 +35,7 @@ describe('RuleWorkspaceViewModel', () => {
     const workspace = new RuleWorkspaceViewModel(repository, checker);
     await workspace.start();
     expect(workspace.getSnapshot().project?.fields).toHaveLength(3);
-    expect(workspace.getSnapshot().project?.rules).toHaveLength(4);
+    expect(workspace.getSnapshot().project?.rules).toHaveLength(5);
 
     await vi.advanceTimersByTimeAsync(50);
     expect(workspace.getSnapshot().checkStatus).toBe('success');

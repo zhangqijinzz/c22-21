@@ -1,3 +1,4 @@
+import { applyResultUnify, buildResultSynonyms, planResultUnify, type ResultSynonymGroup, type ResultUnifyPlan } from '../../domain/resultNormalization';
 import type { BusinessRule, ConditionGroup, PredicateCondition, RuleField, RuleProject } from '../../models/ruleModel';
 import type { WorkspacePort } from '../../viewmodels/workspacePort';
 
@@ -6,6 +7,46 @@ export class RulesViewModel {
 
   selectRule(ruleId: string): void {
     this.workspace.selectRule(ruleId);
+  }
+
+  /** 当前项目里已经用过的结果写法（去重、按首次出现顺序），供输入框复用。 */
+  resultSuggestions(): string[] {
+    const project = this.currentProject();
+    if (!project) return [];
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const rule of project.rules) {
+      const text = rule.result.trim();
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        result.push(text);
+      }
+    }
+    return result;
+  }
+
+  /** 规范化后含义相同、但存在多种原始写法的结果组。 */
+  resultSynonyms(): ResultSynonymGroup[] {
+    return buildResultSynonyms(this.currentProject()?.rules ?? []);
+  }
+
+  /**
+   * 把若干同义结果组统一到各自的目标写法。这是唯一会改写历史结果文案的入口，
+   * 由用户显式触发；组外规则的文案一律不动。
+   */
+  unifyResults(groups: ResultSynonymGroup[]): number {
+    const project = this.currentProject();
+    if (!project) return 0;
+    const plans: ResultUnifyPlan[] = groups.map((group) => planResultUnify(group));
+    const changedCount = plans.reduce((total, plan) => total + plan.changed.length, 0);
+    if (!changedCount) return 0;
+    const rules = applyResultUnify(project.rules, plans);
+    this.workspace.commitProject({ ...project, rules }, `已统一 ${changedCount} 条规则的结果写法，检查将重新核对冲突数`);
+    return changedCount;
+  }
+
+  gotoInspection(): void {
+    this.workspace.navigate('inspection');
   }
 
   addRule(): void {

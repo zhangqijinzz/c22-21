@@ -7,6 +7,7 @@ import type {
   RuleProject,
   SampleInput,
 } from '../models/ruleModel';
+import { normalizeResultText } from './resultNormalization';
 import { matchesRule } from './conditionEvaluator';
 
 const MAX_CASES = 120_000;
@@ -14,6 +15,8 @@ const MAX_EXAMPLES = 4;
 
 export function analyzeRules(project: RuleProject): RuleAnalysis {
   const candidates = project.fields.map((field) => valuesForField(field, project));
+  // 每个结果的规范化含义只计算一次；冲突按含义比较，与用户使用的具体写法解耦。
+  const resultKeyByRuleId = new Map(project.rules.map((rule) => [rule.id, normalizeResultText(rule.result)]));
   const overlaps = new Map<string, RuleOverlap>();
   const seen = new Set<string>();
   const visible = new Set<string>();
@@ -54,10 +57,15 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
           const ruleB = matched[right];
           const key = [ruleA.id, ruleB.id].sort().join('|');
           if (!overlaps.has(key)) {
+            const samePriority = ruleA.priority === ruleB.priority;
+            const literalDifferent = ruleA.result !== ruleB.result;
+            const meaningDifferent = resultKeyByRuleId.get(ruleA.id) !== resultKeyByRuleId.get(ruleB.id);
             overlaps.set(key, {
               ruleAId: ruleA.id,
               ruleBId: ruleB.id,
-              conflict: ruleA.priority === ruleB.priority && ruleA.result !== ruleB.result,
+              conflict: samePriority && meaningDifferent,
+              // 旧口径按原文案逐字比会报冲突，但规范化后含义一致 → 只是写法差异。
+              spellingOnly: samePriority && literalDifferent && !meaningDifferent,
               witness: { ...values },
             });
           }
@@ -67,18 +75,26 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
   };
 
   visit(0, {});
+  const overlapList = [...overlaps.values()];
   const unreachableRuleIds = project.rules.filter((rule) => !seen.has(rule.id)).map((rule) => rule.id);
   const shadowedRuleIds = project.rules.filter((rule) => seen.has(rule.id) && !visible.has(rule.id)).map((rule) => rule.id);
+  // 当前口径按规范化含义计数；旧口径按原始文案逐字计数。
+  // 二者之差正是“同一含义、仅写法不同”而被旧逻辑误报的冲突数，可与归一面板互相核对。
+  const conflictCount = overlapList.filter((overlap) => overlap.conflict).length;
+  const literalConflictCount = overlapList.filter((overlap) => overlap.conflict || overlap.spellingOnly).length;
 
   return {
     checkedCases,
     coveredCases,
     coveragePercent: checkedCases ? Math.round((coveredCases / checkedCases) * 100) : 0,
-    overlaps: [...overlaps.values()],
+    overlaps: overlapList,
     unreachableRuleIds,
     shadowedRuleIds,
     uncoveredExamples,
     truncated,
+    conflictCount,
+    literalConflictCount,
+    spellingOnlyConflictCount: literalConflictCount - conflictCount,
   };
 }
 

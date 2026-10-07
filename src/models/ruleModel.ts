@@ -82,7 +82,13 @@ export interface MatchWitness {
 export interface RuleOverlap {
   ruleAId: string;
   ruleBId: string;
+  /** 同优先级且规范化之后的含义不同才算冲突。 */
   conflict: boolean;
+  /**
+   * 仅写法差异：同优先级、原文案不同（旧口径会报冲突），
+   * 但规范化之后含义一致，因此不再计入 conflict。
+   */
+  spellingOnly: boolean;
   witness: SampleInput;
 }
 
@@ -95,6 +101,12 @@ export interface RuleAnalysis {
   shadowedRuleIds: string[];
   uncoveredExamples: SampleInput[];
   truncated: boolean;
+  /** 按规范化含义判定的冲突数（当前口径）。 */
+  conflictCount: number;
+  /** 按原始文案逐字比较的冲突数（规范化之前的旧口径，用于核对减少量）。 */
+  literalConflictCount: number;
+  /** 旧口径误报、规范化后消解的冲突数：literalConflictCount - conflictCount。 */
+  spellingOnlyConflictCount: number;
 }
 
 export interface SampleEvaluation {

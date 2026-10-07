@@ -4,11 +4,18 @@ import type { RulesViewModel } from './rulesViewModel';
 
 interface RulesViewProps { state: WorkspaceState; viewModel: RulesViewModel }
 
+const RESULT_SUGGESTION_LIST = 'rule-result-suggestions';
+
 export function RulesView({ state, viewModel }: RulesViewProps) {
   const project = state.project;
   const rules = project?.rules ?? [];
+  // 结果输入仍然完全自由；建议列表只负责复用已有写法，不限制输入。
+  const suggestions = viewModel.resultSuggestions();
+  const synonymGroups = viewModel.resultSynonyms();
+  const groupByRuleId = new Map(synonymGroups.flatMap((group) => group.ruleIds.map((ruleId) => [ruleId, group])));
   return (
     <section className="module-page">
+      {suggestions.length > 0 && <datalist id={RESULT_SUGGESTION_LIST}>{suggestions.map((text) => <option key={text} value={text} />)}</datalist>}
       <div className="page-heading">
         <div><span className="eyebrow">模块 02 / 决策逻辑</span><h1>规则工作台</h1><p>用字段条件描述命中路径，并为每条规则分配优先级和结果。</p></div>
         <button className="button button-primary" onClick={() => viewModel.addRule()}><span>＋</span> 新建规则</button>
@@ -17,7 +24,7 @@ export function RulesView({ state, viewModel }: RulesViewProps) {
       {project && project.fields.length === 0 && <div className="inline-issue">先到“字段定义”添加输入字段，再为规则设置条件。</div>}
       {rules.length === 0 ? <div className="empty-card card-surface"><div className="empty-icon">⌘</div><h2>规则还没有开始编织</h2><p>创建第一条规则，组合一个或多个字段条件，并填写命中结果。</p></div> : (
         <div className="rules-list">
-          {rules.map((rule, index) => <RuleCard key={rule.id} rule={rule} index={index} fields={project?.fields ?? []} selected={state.selectedRuleId === rule.id} viewModel={viewModel} />)}
+          {rules.map((rule, index) => <RuleCard key={rule.id} rule={rule} index={index} fields={project?.fields ?? []} selected={state.selectedRuleId === rule.id} viewModel={viewModel} synonymGroup={groupByRuleId.get(rule.id)} />)}
         </div>
       )}
       {state.validationIssues.filter((issue) => issue.ruleId).map((issue, index) => <div className="inline-issue" key={`${issue.code}-${index}`}>! {issue.message}</div>)}
@@ -25,9 +32,11 @@ export function RulesView({ state, viewModel }: RulesViewProps) {
   );
 }
 
-interface RuleCardProps { rule: BusinessRule; index: number; fields: RuleField[]; selected: boolean; viewModel: RulesViewModel }
+interface RuleCardProps { rule: BusinessRule; index: number; fields: RuleField[]; selected: boolean; viewModel: RulesViewModel; synonymGroup?: ResultSynonymGroupLike }
 
-function RuleCard({ rule, index, fields, selected, viewModel }: RuleCardProps) {
+type ResultSynonymGroupLike = ReturnType<RulesViewModel['resultSynonyms']>[number];
+
+function RuleCard({ rule, index, fields, selected, viewModel, synonymGroup }: RuleCardProps) {
   const updateCondition = (conditionIndex: number, condition: PredicateCondition) => viewModel.updateCondition(rule.id, conditionIndex, condition);
   return (
     <article data-rule-id={rule.id} className={`rule-card card-surface${selected ? ' rule-card-selected' : ''}`} onFocus={() => viewModel.selectRule(rule.id)}>
@@ -44,7 +53,16 @@ function RuleCard({ rule, index, fields, selected, viewModel }: RuleCardProps) {
         ) : <div className="nested-condition" key={`${rule.id}-${conditionIndex}`}>条件组 · {condition.operator.toUpperCase()} ({condition.conditions.length} 项)</div>)}
         <button className="text-button add-condition" disabled={fields.length === 0} onClick={() => viewModel.addCondition(rule.id)}>＋ 添加条件</button>
       </div>
-      <div className="result-row"><div className="result-label"><span className="result-arrow">↳</span><span>命中结果</span></div><input aria-label={`${rule.name}命中结果`} value={rule.result} onChange={(event) => viewModel.updateRule(rule.id, { result: event.target.value })} placeholder="例如：自动通过 / 应用 9 折" /></div>
+      <div className="result-row"><div className="result-label"><span className="result-arrow">↳</span><span>命中结果</span></div><div className="result-input-wrap">
+        <input aria-label={`${rule.name}命中结果`} value={rule.result} list={RESULT_SUGGESTION_LIST} onChange={(event) => viewModel.updateRule(rule.id, { result: event.target.value })} placeholder="例如：自动通过 / 应用 9 折（可直接复用已有写法）" />
+        {synonymGroup && rule.result !== synonymGroup.canonical && (
+          <div className="result-synonym-hint" title="规范化后含义一致，但写法不同。规范化仅用于比较，不会自动改写你的文案。">
+            <span>≈ 与 {synonymGroup.ruleIds.length - 1} 条规则含义相同，常用写法“{synonymGroup.canonical}”</span>
+            <button className="text-button" type="button" onClick={() => viewModel.updateRule(rule.id, { result: synonymGroup.canonical })}>采用此写法</button>
+            <button className="text-button" type="button" onClick={() => viewModel.gotoInspection()}>去统一核对 →</button>
+          </div>
+        )}
+      </div></div>
     </article>
   );
 }

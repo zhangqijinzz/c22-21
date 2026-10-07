@@ -1,4 +1,5 @@
-import type { BusinessRule, RuleAnalysis, RuleProject, RuleVersion, SampleInput } from '../../models/ruleModel';
+import { buildResultSynonyms, type ResultSynonymGroup } from '../../domain/resultNormalization';
+import type { BusinessRule, RuleAnalysis, RuleOverlap, RuleProject, RuleVersion, SampleInput } from '../../models/ruleModel';
 import type { WorkspaceState } from '../../viewmodels/workspaceViewModel';
 import type { InspectionViewModel } from './inspectionViewModel';
 
@@ -20,7 +21,7 @@ export function InspectionView({ state, viewModel, onOpenRule }: InspectionViewP
       {state.validationIssues.length > 0 && <div className="validation-banner"><strong>规则暂时无法检查</strong><span>{state.validationIssues[0].message}</span><button className="text-button" onClick={() => state.validationIssues[0].ruleId ? onOpenRule(state.validationIssues[0].ruleId) : undefined}>{state.validationIssues[0].ruleId ? '打开相关规则 →' : '修复项目定义'}</button></div>}
       {state.checkStatus === 'error' && !state.validationIssues.length && <div className="error-banner">检查失败：{state.notice}</div>}
       {!analysis && !state.validationIssues.length && <div className="loading-analysis card-surface"><div className={isChecking ? 'spinner' : 'analysis-orb'}>{isChecking ? '' : '✳'}</div><div><strong>{isChecking ? '正在分析条件空间' : '准备检查规则集合'}</strong><p>{isChecking ? '计算在独立工作线程中运行，可随时取消。' : '点击“运行一致性检查”查看覆盖与规则关系。'}</p></div>{state.checkStatus === 'success' && <span className="success-mark">✓</span>}</div>}
-      {analysis && <AnalysisPanel analysis={analysis} project={project as RuleProject} byId={byId} onOpenRule={onOpenRule} />}
+      {analysis && <AnalysisPanel analysis={analysis} project={project as RuleProject} byId={byId} onOpenRule={onOpenRule} viewModel={viewModel} frozen={Boolean(project?.frozenVersionId)} />}
 
       <section className="versions-section">
         <div className="versions-heading"><div><span className="eyebrow">CHANGE HISTORY</span><h2>规则版本</h2><p>保存检查前后的结构快照。冻结后，当前规则只能通过复制版本继续修改。</p></div><div className="button-row"><button className="button button-subtle" disabled={!rules.length} onClick={() => viewModel.saveVersion()}>＋ 保存版本</button><button className="button button-outline" disabled={!rules.length || Boolean(project?.frozenVersionId)} onClick={() => viewModel.freeze()}>◈ 冻结当前</button></div></div>
@@ -30,22 +31,30 @@ export function InspectionView({ state, viewModel, onOpenRule }: InspectionViewP
   );
 }
 
-interface AnalysisPanelProps { analysis: RuleAnalysis; project: RuleProject; byId: Map<string, BusinessRule>; onOpenRule: (ruleId: string) => void }
+interface AnalysisPanelProps { analysis: RuleAnalysis; project: RuleProject; byId: Map<string, BusinessRule>; onOpenRule: (ruleId: string) => void; viewModel: InspectionViewModel; frozen: boolean }
 
-function AnalysisPanel({ analysis, project, byId, onOpenRule }: AnalysisPanelProps) {
-  const conflictCount = analysis.overlaps.filter((overlap) => overlap.conflict).length;
+function AnalysisPanel({ analysis, project, byId, onOpenRule, viewModel, frozen }: AnalysisPanelProps) {
+  const conflictCount = analysis.conflictCount;
   const overlapCount = analysis.overlaps.length;
+  const spellingOnlyCount = analysis.spellingOnlyConflictCount;
   const coveredRules = Math.max(0, project.rules.length - analysis.unreachableRuleIds.length);
+  // 同义结果组用于“统一写法”：统一只改写文案，不改变条件空间，冲突变化可与上方计数核对。
+  const synonymGroups = buildResultSynonyms(project.rules);
+  const frozenNotice = frozen ? '当前版本已冻结，复制版本后才能统一写法' : undefined;
   return <>
     <div className="analysis-summary">
       <MetricCard label="输入空间覆盖" value={`${analysis.coveragePercent}%`} detail={`${analysis.coveredCases} / ${analysis.checkedCases} 个代表分区`} icon="◌" tone={analysis.uncoveredExamples.length ? 'amber' : 'green'} />
-      <MetricCard label="规则关系" value={`${overlapCount}`} detail={`${conflictCount} 个同优先级结果冲突`} icon="⇄" tone={conflictCount ? 'red' : 'blue'} />
+      <MetricCard label="规则关系" value={`${overlapCount}`} detail={`${conflictCount} 个含义冲突 · ${spellingOnlyCount} 个仅写法差异`} icon="⇄" tone={conflictCount ? 'red' : spellingOnlyCount ? 'amber' : 'blue'} />
       <MetricCard label="可命中规则" value={`${coveredRules} / ${project.rules.length}`} detail={`${analysis.unreachableRuleIds.length} 条不可达 · ${analysis.shadowedRuleIds.length} 条被遮蔽`} icon="⌁" tone={analysis.unreachableRuleIds.length ? 'amber' : 'green'} />
+    </div>
+    <div className="normalization-note">
+      <span>≈</span>
+      <p>冲突按结果的规范化含义比较（忽略空格、全半角与 · 等分隔符差异），规范化只用于比对，不会改写已有文案。按旧的逐字口径会有 <b>{analysis.literalConflictCount}</b> 个冲突，其中 <b>{spellingOnlyCount}</b> 个只是写法不同。</p>
     </div>
     {analysis.truncated && <div className="truncated-banner">输入空间超过单次检查上限，以下数据来自已分析分区；请减少字段组合后再次检查。</div>}
     <div className="analysis-grid">
-      <section className="analysis-card card-surface"><header className="analysis-card-heading"><span className="analysis-icon conflict-icon">⇄</span><div><h2>重叠与冲突</h2><p>同一输入命中多条规则；同优先级且结果不同会产生冲突。</p></div><b>{overlapCount}</b></header>
-        {overlapCount ? <div className="finding-list">{analysis.overlaps.slice(0, 6).map((overlap) => <div className="finding-row" key={`${overlap.ruleAId}-${overlap.ruleBId}`}><div className="finding-copy"><div><button className="inline-rule-link" onClick={() => onOpenRule(overlap.ruleAId)}>{byId.get(overlap.ruleAId)?.name ?? overlap.ruleAId}</button><span className="finding-join">↔</span><button className="inline-rule-link" onClick={() => onOpenRule(overlap.ruleBId)}>{byId.get(overlap.ruleBId)?.name ?? overlap.ruleBId}</button></div><span>{formatWitness(overlap.witness, project)}</span></div><span className={overlap.conflict ? 'severity-tag severity-danger' : 'severity-tag severity-warn'}>{overlap.conflict ? '结果冲突' : '条件重叠'}</span></div>)}</div> : <SuccessEmpty text="没有发现规则重叠" />}
+      <section className="analysis-card card-surface"><header className="analysis-card-heading"><span className="analysis-icon conflict-icon">⇄</span><div><h2>重叠与冲突</h2><p>同一输入命中多条规则；同优先级且规范化后结果含义不同才是冲突。</p></div><b>{overlapCount}</b></header>
+        {overlapCount ? <div className="finding-list">{analysis.overlaps.slice(0, 6).map((overlap) => <div className="finding-row" key={`${overlap.ruleAId}-${overlap.ruleBId}`}><div className="finding-copy"><div><button className="inline-rule-link" onClick={() => onOpenRule(overlap.ruleAId)}>{byId.get(overlap.ruleAId)?.name ?? overlap.ruleAId}</button><span className="finding-join">↔</span><button className="inline-rule-link" onClick={() => onOpenRule(overlap.ruleBId)}>{byId.get(overlap.ruleBId)?.name ?? overlap.ruleBId}</button></div><span>{formatOverlapResults(overlap, byId)}</span><span className="overlap-witness">{formatWitness(overlap.witness, project)}</span></div><span className={overlap.conflict ? 'severity-tag severity-danger' : overlap.spellingOnly ? 'severity-tag severity-spelling' : 'severity-tag severity-warn'}>{overlap.conflict ? '含义冲突' : overlap.spellingOnly ? '仅写法差异' : '条件重叠'}</span></div>)}</div> : <SuccessEmpty text="没有发现规则重叠" />}
       </section>
       <section className="analysis-card card-surface"><header className="analysis-card-heading"><span className="analysis-icon coverage-icon">◔</span><div><h2>未覆盖输入</h2><p>没有任何规则命中的合法输入组合。</p></div><b>{analysis.uncoveredExamples.length ? '有' : '无'}</b></header>
         {analysis.uncoveredExamples.length ? <div className="finding-list">{analysis.uncoveredExamples.map((example, index) => <div className="uncovered-row" key={index}><span className="uncovered-index">0{index + 1}</span><div><strong>未命中输入组合</strong><span>{formatWitness(example, project)}</span></div><span className="severity-tag severity-warn">未覆盖</span></div>)}</div> : <SuccessEmpty text="输入空间已完整覆盖" />}
@@ -57,11 +66,81 @@ function AnalysisPanel({ analysis, project, byId, onOpenRule }: AnalysisPanelPro
         {analysis.shadowedRuleIds.length ? <div className="compact-findings">{analysis.shadowedRuleIds.map((id) => <button className="compact-rule" key={id} onClick={() => onOpenRule(id)}><span>◉</span><strong>{byId.get(id)?.name ?? id}</strong><i>调整优先级 →</i></button>)}</div> : <SuccessEmpty text="没有被完全遮蔽的规则" />}
       </section>
     </div>
+    <ResultSynonymPanel groups={synonymGroups} analysis={analysis} byId={byId} disabled={frozen} disabledReason={frozenNotice} onUnify={(group) => viewModel.unifyResults([group])} onUnifyAll={() => viewModel.unifyResults(synonymGroups)} onOpenRule={onOpenRule} />
   </>;
 }
 
 function MetricCard({ label, value, detail, icon, tone }: { label: string; value: string; detail: string; icon: string; tone: string }) {
   return <article className={`metric-card card-surface metric-${tone}`}><span className="metric-icon">{icon}</span><span className="metric-label">{label}</span><strong>{value}</strong><span className="metric-detail">{detail}</span></article>;
+}
+
+interface ResultSynonymPanelProps {
+  groups: ResultSynonymGroup[];
+  analysis: RuleAnalysis;
+  byId: Map<string, BusinessRule>;
+  disabled: boolean;
+  disabledReason?: string;
+  onUnify: (group: ResultSynonymGroup) => void;
+  onUnifyAll: () => void;
+  onOpenRule: (ruleId: string) => void;
+}
+
+function ResultSynonymPanel({ groups, analysis, byId, disabled, disabledReason, onUnify, onUnifyAll, onOpenRule }: ResultSynonymPanelProps) {
+  if (groups.length === 0) {
+    return <section className="synonym-section card-surface">
+      <header className="synonym-heading"><div><span className="eyebrow">RESULT VOCABULARY</span><h2>同义结果归一</h2><p>按规范化含义分组检查结果写法。当前没有发现“含义相同但写法不同”的结果，历史文案均保持原样。</p></div><b className="synonym-count">0 组</b></header>
+      <SuccessEmpty text="所有结果写法一致，无需统一" />
+    </section>;
+  }
+  return <section className="synonym-section card-surface">
+    <header className="synonym-heading">
+      <div><span className="eyebrow">RESULT VOCABULARY</span><h2>同义结果归一</h2><p>下列结果在规范化之后含义相同。统一只改写文案、不改条件；执行后自动重检，可核对“逐字口径冲突”的减少量。</p></div>
+      <div className="button-row"><b className="synonym-count">{groups.length} 组</b>{!disabled && <button className="button button-outline" onClick={onUnifyAll}>全部统一为常用写法</button>}</div>
+    </header>
+    {disabledReason && <div className="inline-issue">{disabledReason}</div>}
+    <div className="synonym-list">
+      {groups.map((group) => <SynonymGroupRow key={group.key} group={group} analysis={analysis} byId={byId} disabled={disabled} onUnify={() => onUnify(group)} onOpenRule={onOpenRule} />)}
+    </div>
+  </section>;
+}
+
+function SynonymGroupRow({ group, analysis, byId, disabled, onUnify, onOpenRule }: { group: ResultSynonymGroup; analysis: RuleAnalysis; byId: Map<string, BusinessRule>; disabled: boolean; onUnify: () => void; onOpenRule: (ruleId: string) => void }) {
+  // 组内规则两两在同优先级、原文案不同的重叠数 = 统一后“逐字口径”将减少的冲突数。
+  const affectedPairs = countGroupConflicts(group, analysis);
+  const rewriteCount = group.variants
+    .filter((variant) => variant.text !== group.canonical)
+    .reduce((total, variant) => total + variant.ruleIds.length, 0);
+  return <article className="synonym-row">
+    <div className="synonym-variants">
+      {group.variants.map((variant) => <div className={`synonym-variant${variant.text === group.canonical ? ' is-canonical' : ''}`} key={variant.text}>
+        <code>“{variant.text}”</code>
+        <span className="synonym-meta">{variant.ruleIds.length} 条</span>
+        {variant.text === group.canonical && <span className="canonical-tag">常用写法</span>}
+        <span className="synonym-rule-links">{variant.ruleIds.map((ruleId) => <button key={ruleId} className="inline-rule-link" onClick={() => onOpenRule(ruleId)}>{byId.get(ruleId)?.name ?? ruleId}</button>)}</span>
+      </div>)}
+    </div>
+    <div className="synonym-action">
+      <div className="synonym-projection"><strong>统一为“{group.canonical}”</strong><span>将改写 {rewriteCount} 条规则{affectedPairs > 0 ? <> · 逐字口径冲突 <b>{affectedPairs}</b> → <b>0</b></> : ' · 不影响冲突计数'}</span></div>
+      <button className="button button-subtle" disabled={disabled || rewriteCount === 0} onClick={onUnify}>统一此组</button>
+    </div>
+  </article>;
+}
+
+/**
+ * 统计某个同义结果组内部、在当前检查中会被旧口径（逐字比较）计为冲突的规则对数。
+ * 规则对必须真实重叠且同优先级；与 RuleAnalysis 中的 literalConflictCount 口径一致。
+ */
+function countGroupConflicts(group: ResultSynonymGroup, analysis: RuleAnalysis): number {
+  const ids = new Set(group.ruleIds);
+  return analysis.overlaps.filter((overlap) => overlap.spellingOnly
+    && ids.has(overlap.ruleAId)
+    && ids.has(overlap.ruleBId)).length;
+}
+
+function formatOverlapResults(overlap: RuleOverlap, byId: Map<string, BusinessRule>): string {
+  const resultA = byId.get(overlap.ruleAId)?.result ?? '';
+  const resultB = byId.get(overlap.ruleBId)?.result ?? '';
+  return `“${resultA || '—'}” × “${resultB || '—'}”`;
 }
 
 function SuccessEmpty({ text }: { text: string }) { return <div className="success-empty"><span>✓</span>{text}</div>; }

@@ -6,11 +6,9 @@ import { InspectionViewModel } from '../features/inspection/inspectionViewModel'
 
 export function createRuleWeaveViewModels() {
   const workspace = new RuleWorkspaceViewModel();
-  return {
-    workspace,
-    fields: new FieldsViewModel(workspace),
-    rules: new RulesViewModel(workspace),
-    samples: new SamplesViewModel(workspace),
-    inspection: new InspectionViewModel(workspace),
-  };
+  const fields = new FieldsViewModel(workspace);
+  const rules = new RulesViewModel(workspace);
+  const samples = new SamplesViewModel(workspace);
+  const inspection = new InspectionViewModel(workspace, rules);
+  return { workspace, fields, rules, samples, inspection };
 }
